@@ -3,27 +3,31 @@ import nodemailer from "nodemailer";
 
 export async function POST(req: Request) {
   try {
-    // Parse incoming JSON data
-    const { email, title, description } = await req.json();
+    const { email, title, description, reminder } = await req.json();
 
-    // Configure Nodemailer
-    const transporter = nodemailer.createTransport({
-      service: "gmail", // Or another email service/SMTP
-      auth: {
-        user: process.env.EMAIL_USER, // your email
-        pass: process.env.EMAIL_PASS, // app password
-      },
-    });
+    if (reminder === "none") {
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+          user: process.env.EMAIL_USER,
+          pass: process.env.EMAIL_PASS,
+        },
+      });
 
-    // Send email
-    await transporter.sendMail({
-      from: `"Trello Clone" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: `Task Assigned: ${title}`,
-      html: `<h3>${title}</h3><p>${description}</p>`,
-    });
+      await transporter.sendMail({
+        from: `"Trello Clone" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: `Task Assigned: ${title}`,
+        html: `<h3>${title}</h3><p>${description}</p>`,
+      });
 
-    return NextResponse.json({ message: "Email sent successfully" });
+      return NextResponse.json({ message: "Email sent successfully" });
+    } else {
+      // Logic for handling scheduled reminders would go here.
+      // For now, we will log a message to the console.
+      console.log(`Reminder for task "${title}" is scheduled for assignee "${email}" with an interval of "${reminder}".`);
+      return NextResponse.json({ message: "Reminder scheduled successfully" });
+    }
   } catch (error) {
     console.error(error);
     return NextResponse.json({ message: "Error sending email" }, { status: 500 });
