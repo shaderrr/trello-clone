@@ -121,6 +121,7 @@ export function useBoard(boardId: string) {
       assignee?: string;
       dueDate?: string;
       priority?: "low" | "medium" | "high";
+      reminder?: "none" | "15 min" | "1 hour" | "3 hour";
     }
   ) {
     try {
@@ -133,6 +134,7 @@ export function useBoard(boardId: string) {
         sort_order:
           columns.find((col) => col.id === columnId)?.tasks.length || 0,
         priority: taskData.priority || "medium",
+        reminder: taskData.reminder || "none",
       });
 
       setColumns((prev) =>
