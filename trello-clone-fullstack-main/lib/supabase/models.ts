@@ -31,4 +31,5 @@ export interface Task {
   priority: "low" | "medium" | "high";
   sort_order: number;
   created_at: string;
+  reminder: "none" | "15 min" | "1 hour" | "3 hour";
 }
