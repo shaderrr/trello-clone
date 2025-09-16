@@ -129,7 +129,7 @@ export const taskService = {
 
   async createTask(
     supabase: SupabaseClient,
-    task: Omit<Task, "id" | "created_at" | "updated_at">
+    task: Omit<Task, "id" | "created_at">
   ): Promise<Task> {
     const { data, error } = await supabase
       .from("tasks")
