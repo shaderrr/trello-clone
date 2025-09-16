@@ -153,6 +153,22 @@ function DroppableColumn({
                     </SelectContent>
                   </Select>
                 </div>
+                
+                <div className="space-y-2">
+                  <Label>Reminder</Label>
+                  <Select name="reminder" defaultValue="none">
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {["none", "15 min", "1 hour", "3 hour"].map((reminder, key) => (
+                        <SelectItem key={key} value={reminder}>
+                          {reminder.charAt(0).toUpperCase() + reminder.slice(1)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
 
                 <div className="space-y-2">
                   <Label>Due Date</Label>
@@ -377,63 +393,55 @@ export default function BoardPage() {
     } catch {}
   }
 
-  async function createTask(taskData: {
-    title: string;
-    description?: string;
-    assignee?: string;
-    dueDate?: string;
-    priority: "low" | "medium" | "high";
-  }) {
-    const targetColumn = columns[0];
-    if (!targetColumn) {
-      throw new Error("No column available to add task");
+  async function handleCreateTask(e: any) {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const taskData = {
+      title: formData.get("title") as string,
+      description: (formData.get("description") as string) || undefined,
+      assignee: (formData.get("assignee") as string) || undefined,
+      dueDate: (formData.get("dueDate") as string) || undefined,
+      priority:
+        (formData.get("priority") as "low" | "medium" | "high") || "medium",
+      reminder:
+        (formData.get("reminder") as "none" | "15 min" | "1 hour" | "3 hour") ||
+        "none",
+    };
+
+    if (!taskData.title.trim()) return;
+
+    // Validate email if provided
+    function isValidEmail(email: string) {
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    }
+    if (taskData.assignee && !isValidEmail(taskData.assignee)) {
+      alert("Please enter a valid email address.");
+      return;
     }
 
-    await createRealTask(targetColumn.id, taskData);
+    try {
+      await createRealTask(columns[0].id, taskData);
+
+      if (taskData.assignee) {
+        await fetch("/api/send-assignment-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: taskData.assignee,
+            title: taskData.title,
+            description: taskData.description,
+            dueDate: taskData.dueDate,
+            reminder: taskData.reminder,
+          }),
+        });
+      }
+    } catch (error) {
+      console.error("Failed to create task or send email:", error);
+      return;
+    }
+    const trigger = document.querySelector('[data-state="open"') as HTMLElement;
+    if (trigger) trigger.click();
   }
-
-  function isValidEmail(email: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-async function handleCreateTask(e: any) {
-  e.preventDefault();
-  const formData = new FormData(e.currentTarget);
-  const taskData = {
-    title: formData.get("title") as string,
-    description: (formData.get("description") as string) || undefined,
-    assignee: (formData.get("assignee") as string) || undefined,
-    dueDate: (formData.get("dueDate") as string) || undefined,
-    priority:
-      (formData.get("priority") as "low" | "medium" | "high") || "medium",
-  };
-
-  if (!taskData.title.trim()) return;
-
-  // Validate email if provided
-  if (taskData.assignee && !isValidEmail(taskData.assignee)) {
-    alert("Please enter a valid email address.");
-    return;
-  }
-
-  await createTask(taskData);
-
-  if (taskData.assignee) {
-    await fetch("/api/send-assignment-email", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: taskData.assignee,
-        title: taskData.title,
-        description: taskData.description,
-        dueDate: taskData.dueDate,
-      }),
-    });
-  }
-
-  const trigger = document.querySelector('[data-state="open"') as HTMLElement;
-  if (trigger) trigger.click();
-}
 
   function handleDragStart(event: DragStartEvent) {
     const taskId = event.active.id as string;
@@ -495,40 +503,47 @@ async function handleCreateTask(e: any) {
     const taskId = active.id as string;
     const overId = over.id as string;
 
-    const targetColumn = columns.find((col) => col.id === overId);
-    if (targetColumn) {
-      const sourceColumn = columns.find((col) =>
+    const sourceColumn = columns.find((col) =>
         col.tasks.some((task) => task.id === taskId)
-      );
+    );
 
-      if (sourceColumn && sourceColumn.id !== targetColumn.id) {
-        await moveTask(taskId, targetColumn.id, targetColumn.tasks.length);
-      }
-    } else {
-      // Check to see if were dropping on another task
-      const sourceColumn = columns.find((col) =>
-        col.tasks.some((task) => task.id === taskId)
-      );
-
-      const targetColumn = columns.find((col) =>
+    const targetColumnByTask = columns.find((col) =>
         col.tasks.some((task) => task.id === overId)
-      );
+    );
+    const targetColumnByColumn = columns.find((col) => col.id === overId);
 
-      if (sourceColumn && targetColumn) {
-        const oldIndex = sourceColumn.tasks.findIndex(
-          (task) => task.id === taskId
-        );
+    if (!sourceColumn) return;
 
-        const newIndex = targetColumn.tasks.findIndex(
-          (task) => task.id === overId
-        );
+    const targetColumn = targetColumnByTask || targetColumnByColumn;
+    if (!targetColumn) return;
 
-        if (oldIndex !== newIndex) {
-          await moveTask(taskId, targetColumn.id, newIndex);
-        }
-      }
+    // Prevent moving a task backward from 'In Progress' to 'To Do'
+    if (sourceColumn.title === "In Progress" && targetColumn.title === "To Do") {
+        console.warn("Tasks in 'In Progress' cannot be moved back to 'To Do'");
+        return;
     }
-  }
+    
+    // Determine the new index based on where the task was dropped
+    let newIndex;
+    if (targetColumnByTask) {
+        newIndex = targetColumn.tasks.findIndex((task) => task.id === overId);
+    } else {
+        newIndex = targetColumn.tasks.length;
+    }
+
+    const oldIndex = sourceColumn.tasks.findIndex((task) => task.id === taskId);
+    const newColumnId = targetColumn.id;
+    
+    if (sourceColumn.id !== newColumnId || oldIndex !== newIndex) {
+        await moveTask(taskId, newColumnId, newIndex);
+        
+        // Stop reminder when task moves to 'Review' or 'Done' column
+        if (targetColumn.title === 'Review' || targetColumn.title === 'Done') {
+            console.log(`Reminder for task ${taskId} stopped because it was moved to the ${targetColumn.title} column.`);
+        }
+    }
+}
+
 
   async function handleCreateColumn(e: React.FormEvent) {
     e.preventDefault();
@@ -794,6 +809,22 @@ async function handleCreateTask(e: any) {
                           <SelectItem key={key} value={priority}>
                             {priority.charAt(0).toUpperCase() +
                               priority.slice(1)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Reminder</Label>
+                    <Select name="reminder" defaultValue="none">
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {["none", "15 min", "1 hour", "3 hour"].map((reminder, key) => (
+                          <SelectItem key={key} value={reminder}>
+                            {reminder.charAt(0).toUpperCase() + reminder.slice(1)}
                           </SelectItem>
                         ))}
                       </SelectContent>
