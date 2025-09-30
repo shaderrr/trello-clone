@@ -141,6 +141,22 @@ export const taskService = {
 
     return data;
   },
+  
+   async updateTask(
+    supabase: SupabaseClient,
+    taskId: string,
+    updates: Partial<Task>
+  ): Promise<Task> {
+    const { data, error } = await supabase
+      .from("tasks")
+      .update(updates)
+      .eq("id", taskId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  },
 
   async moveTask(
     supabase: SupabaseClient,
