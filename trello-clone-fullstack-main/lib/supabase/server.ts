@@ -1,4 +1,3 @@
-
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { auth } from "@clerk/nextjs/server";
