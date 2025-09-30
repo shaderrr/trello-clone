@@ -8,8 +8,17 @@ import {
   taskService,
 } from "../services";
 import { useEffect, useState } from "react";
-import { Board, Column, ColumnWithTasks, Task } from "../supabase/models";
+import { Board, ColumnWithTasks, Task } from "../supabase/models";
 import { useSupabase } from "../supabase/SupabaseProvider";
+
+// Helper function to calculate the first reminder time for recurring reminders
+function getFirstReminderTime(reminderInterval: string): Date | null {
+    if (reminderInterval === 'none' || !reminderInterval) return null;
+    const nextTime = new Date();
+    // Schedule the first reminder to be very soon (e.g., 1 min) to start the cycle
+    nextTime.setMinutes(nextTime.getMinutes() + 1); 
+    return nextTime;
+}
 
 export function useBoards() {
   const { user } = useUser();
@@ -19,18 +28,18 @@ export function useBoards() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (user) {
+    if (user && supabase) {
       loadBoards();
     }
   }, [user, supabase]);
 
   async function loadBoards() {
-    if (!user) return;
+    if (!user || !supabase) return;
 
     try {
       setLoading(true);
       setError(null);
-      const data = await boardService.getBoards(supabase!, user.id);
+      const data = await boardService.getBoards(supabase, user.id);
       setBoards(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load boards.");
@@ -44,11 +53,11 @@ export function useBoards() {
     description?: string;
     color?: string;
   }) {
-    if (!user) throw new Error("User not authenticated");
+    if (!user || !supabase) throw new Error("User not authenticated");
 
     try {
       const newBoard = await boardDataService.createBoardWithDefaultColumns(
-        supabase!,
+        supabase,
         {
           ...boardData,
           userId: user.id,
@@ -73,19 +82,19 @@ export function useBoard(boardId: string) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (boardId) {
+    if (boardId && supabase) {
       loadBoard();
     }
   }, [boardId, supabase]);
 
   async function loadBoard() {
-    if (!boardId) return;
+    if (!boardId || !supabase) return;
 
     try {
       setLoading(true);
       setError(null);
       const data = await boardDataService.getBoardWithColumns(
-        supabase!,
+        supabase,
         boardId
       );
       setBoard(data.board);
@@ -98,9 +107,10 @@ export function useBoard(boardId: string) {
   }
 
   async function updateBoard(boardId: string, updates: Partial<Board>) {
+    if (!supabase) return;
     try {
       const updatedBoard = await boardService.updateBoard(
-        supabase!,
+        supabase,
         boardId,
         updates
       );
@@ -124,8 +134,11 @@ export function useBoard(boardId: string) {
       reminder?: "none" | "15 min" | "1 hour" | "3 hour";
     }
   ) {
+    if (!supabase) return;
     try {
-      const newTask = await taskService.createTask(supabase!, {
+      const firstReminderTime = getFirstReminderTime(taskData.reminder || 'none');
+      
+      const newTask = await taskService.createTask(supabase, {
         title: taskData.title,
         description: taskData.description || null,
         assignee: taskData.assignee || null,
@@ -135,6 +148,7 @@ export function useBoard(boardId: string) {
           columns.find((col) => col.id === columnId)?.tasks.length || 0,
         priority: taskData.priority || "medium",
         reminder: taskData.reminder || "none",
+        next_reminder_at: firstReminderTime ? firstReminderTime.toISOString() : null,
       });
 
       setColumns((prev) =>
@@ -150,23 +164,60 @@ export function useBoard(boardId: string) {
       );
     }
   }
+  
+  async function updateTask(taskId: string, updates: Partial<Task>) {
+    if (!supabase) return;
+    try {
+      // The frontend now calls our secure API route for admin-only edits
+      const response = await fetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updates),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to update the task.');
+      }
+
+      const updatedTask = await response.json();
+
+      // Update the local state to reflect the change immediately
+      setColumns((prev) =>
+        prev.map((col) => ({
+          ...col,
+          tasks: col.tasks.map((task) =>
+            task.id === taskId ? { ...task, ...updatedTask } : task
+          ),
+        }))
+      );
+
+      return updatedTask;
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to update the task."
+      );
+    }
+  }
 
   async function moveTask(
     taskId: string,
     newColumnId: string,
     newOrder: number
   ) {
+    if (!supabase) return;
     try {
-      await taskService.moveTask(supabase!, taskId, newColumnId, newOrder);
+      await taskService.moveTask(supabase, taskId, newColumnId, newOrder);
 
       setColumns((prev) => {
-        const newColumns = [...prev];
-
-        // Find and remove task from the old column
+        const newColumns = JSON.parse(JSON.stringify(prev));
         let taskToMove: Task | null = null;
+        
         for (const col of newColumns) {
-          const taskIndex = col.tasks.findIndex((task) => task.id === taskId);
-          if (taskIndex !== -1) {
+          const taskIndex = col.tasks.findIndex((t: Task) => t.id === taskId);
+          if (taskIndex > -1) {
             taskToMove = col.tasks[taskIndex];
             col.tasks.splice(taskIndex, 1);
             break;
@@ -174,13 +225,12 @@ export function useBoard(boardId: string) {
         }
 
         if (taskToMove) {
-          // Add task to new column
-          const targetColumn = newColumns.find((col) => col.id === newColumnId);
-          if (targetColumn) {
-            targetColumn.tasks.splice(newOrder, 0, taskToMove);
+          const targetCol = newColumns.find((c: ColumnWithTasks) => c.id === newColumnId);
+          if (targetCol) {
+            targetCol.tasks.splice(newOrder, 0, taskToMove);
           }
         }
-
+        
         return newColumns;
       });
     } catch (err) {
@@ -189,10 +239,10 @@ export function useBoard(boardId: string) {
   }
 
   async function createColumn(title: string) {
-    if (!board || !user) throw new Error("Board not loaded");
+    if (!board || !user || !supabase) throw new Error("Board not loaded");
 
     try {
-      const newColumn = await columnService.createColumn(supabase!, {
+      const newColumn = await columnService.createColumn(supabase, {
         title,
         board_id: board.id,
         sort_order: columns.length,
@@ -207,9 +257,10 @@ export function useBoard(boardId: string) {
   }
 
   async function updateColumn(columnId: string, title: string) {
+    if (!supabase) return;
     try {
       const updatedColumn = await columnService.updateColumnTitle(
-        supabase!,
+        supabase,
         columnId,
         title
       );
@@ -237,5 +288,7 @@ export function useBoard(boardId: string) {
     moveTask,
     createColumn,
     updateColumn,
+    updateTask,
   };
 }
+      
