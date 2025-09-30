@@ -32,4 +32,5 @@ export interface Task {
   sort_order: number;
   created_at: string;
   reminder: "none" | "15 min" | "1 hour" | "3 hour";
+  next_reminder_at?: string | null; 
 }
